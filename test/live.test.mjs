@@ -92,7 +92,7 @@ test("the payment gate is read-only-probeable and never issues tickets unpaid", 
     const accept = challenge.accepts.find((entry) => entry.network === "eip155:8453");
     assert.ok(accept, "the challenge must advertise Base mainnet");
     assert.equal(accept.asset.toLowerCase(), "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913");
-    assert.equal(accept.maxAmountRequired, order.totalAtomic,
+    assert.equal(accept.amount ?? accept.maxAmountRequired, order.totalAtomic,
       "the challenge must ask for exactly the reserved total, not a price the caller supplied");
     assert.ok(probe.headers.get("payment-required"), "the v2 header must be present");
   }

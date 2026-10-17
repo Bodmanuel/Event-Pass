@@ -27,8 +27,8 @@ export const PAYER = "0x00000000000000000000000000000000000000a1";
  * `settleStatus` override the reply with an error status. Every call records the
  * `authorization` header and the URL the server actually hit.
  */
-export async function startFacilitator({ valid = true, settle = true, prefix = "", verifyStatus, settleStatus } = {}) {
-  const calls = { verify: 0, settle: 0, settled: [], payloads: [], authorization: [], urls: [] };
+export async function startFacilitator({ valid = true, settle = true, prefix = "", verifyStatus, settleStatus, errorBody } = {}) {
+  const calls = { verify: 0, settle: 0, settled: [], payloads: [], settlePayloads: [], authorization: [], urls: [] };
   const app = express();
   app.use(express.json({ limit: "256kb" }));
   const note = (req) => {
@@ -39,12 +39,13 @@ export async function startFacilitator({ valid = true, settle = true, prefix = "
     calls.verify += 1;
     calls.payloads.push(req.body);
     note(req);
-    if (verifyStatus) { res.status(verifyStatus).json({ errorReason: "upstream_error" }); return; }
+    if (verifyStatus) { res.status(verifyStatus).json(errorBody ?? { errorReason: "upstream_error" }); return; }
     res.json(valid ? { isValid: true, payer: PAYER } : { isValid: false, invalidReason: "insufficient_funds" });
   });
   app.post(`${prefix}/settle`, (req, res) => {
     calls.settle += 1;
-    calls.settled.push(req.body.paymentRequirements?.maxAmountRequired);
+    calls.settlePayloads.push(req.body);
+    calls.settled.push(req.body.paymentRequirements?.amount ?? req.body.paymentRequirements?.maxAmountRequired);
     note(req);
     if (settleStatus) { res.status(settleStatus).json({ errorReason: "upstream_error" }); return; }
     res.json(settle
@@ -149,9 +150,11 @@ export function paymentHeader(overrides = {}) {
 
 /**
  * The same payment in the x402 v2 shape PayBox sends: the scheme, network and
- * asset live under `accepted`, with no top-level copies. `omitScheme` and
- * `omitNetwork` remove the field from `accepted` entirely, which is how a
- * genuinely scheme-less payload is represented.
+ * asset live under `accepted`, with no top-level copies, and `accepted` uses
+ * the v2 `amount` field. `omitScheme` and `omitNetwork` remove the field from
+ * `accepted` entirely, which is how a genuinely scheme-less payload is
+ * represented; `v1Accepted` emits the old v1 `maxAmountRequired` field instead,
+ * which is the shape CDP rejects.
  */
 export function paymentHeaderV2(overrides = {}) {
   const {
@@ -159,14 +162,14 @@ export function paymentHeaderV2(overrides = {}) {
     asset = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", scheme = "exact",
     validAfter = "0", validBefore = "9999999999", nonce = `0x${"ef".repeat(32)}`,
     signature = `0x${"cd".repeat(65)}`, from = PAYER, header = "PAYMENT-SIGNATURE",
-    omitScheme = false, omitNetwork = false,
+    omitScheme = false, omitNetwork = false, v1Accepted = false,
   } = overrides;
   const accepted = {
     scheme,
     network,
     asset,
     payTo: to,
-    maxAmountRequired: amount,
+    ...(v1Accepted ? { maxAmountRequired: amount } : { amount }),
     maxTimeoutSeconds: 300,
     extra: { name: "USDC", version: "2" },
   };

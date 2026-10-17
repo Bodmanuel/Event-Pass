@@ -96,12 +96,13 @@ test("the unpaid challenge asks for exactly $0.10 on Base and settles nothing", 
   assert.equal(response.status, 402);
   const challenge = await response.json();
 
-  assert.equal(challenge.accepts.length, 2, "both Base spellings are advertised");
+  assert.equal(challenge.accepts.length, 1, "v2 advertises one CAIP-2 requirement");
   for (const entry of challenge.accepts) {
-    assert.equal(entry.maxAmountRequired, "100000", "the price is fixed at 100000 atomic units");
+    assert.equal(entry.amount, "100000", "the price is fixed at 100000 atomic units");
+    assert.equal(entry.maxAmountRequired, undefined, "v2 does not use the v1 amount field");
     assert.equal(entry.asset, USDC, "the asset is canonical Base USDC");
     assert.equal(entry.payTo, PAY_TO, "the payee is the configured address");
-    assert.ok(["eip155:8453", "base"].includes(entry.network));
+    assert.equal(entry.network, "eip155:8453");
     assert.equal(entry.extra.orderId, undefined, "the smoke resource has no order, so it must not claim one");
   }
   assert.ok(response.headers.get("payment-required"), "the v2 challenge header must be present");
@@ -329,7 +330,7 @@ test("the four product tools' routes are unaffected by the smoke routes", async 
   const unpaid = await fetch(order.payUrl);
   assert.equal(unpaid.status, 402, "an order still answers with its own 402 challenge");
   const productChallenge = await unpaid.json();
-  assert.equal(productChallenge.accepts[0].maxAmountRequired, order.totalAtomic);
-  assert.notEqual(productChallenge.accepts[0].maxAmountRequired, "100000", "the product path is not the smoke price");
+  assert.equal(productChallenge.accepts[0].amount, order.totalAtomic);
+  assert.notEqual(productChallenge.accepts[0].amount, "100000", "the product path is not the smoke price");
   assert.equal(productChallenge.accepts[0].extra.orderId, order.orderId, "the product challenge still carries its order id");
 });

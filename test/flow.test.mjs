@@ -45,10 +45,15 @@ for (const backend of BACKENDS) {
     assert.equal(challenge.status, 402);
     const body = await challenge.json();
     assert.equal(body.x402Version, 2);
-    assert.equal(body.accepts.length, 2);
-    assert.deepEqual(body.accepts.map((entry) => entry.network).sort(), ["base", "eip155:8453"]);
+    // x402 v2 advertises one CAIP-2 requirement in the v2 vocabulary. The old
+    // dual "base"/"eip155:8453" challenge with `maxAmountRequired` made clients
+    // echo a v1-shaped `accepted` that CDP's v2 schema rejects.
+    assert.equal(body.accepts.length, 1);
+    assert.equal(body.accepts[0].network, "eip155:8453");
+    assert.equal(body.resource.url, order.payUrl, "v2 carries the resource descriptor at the top level");
     for (const entry of body.accepts) {
-      assert.equal(entry.maxAmountRequired, "19000000");
+      assert.equal(entry.amount, "19000000");
+      assert.equal(entry.maxAmountRequired, undefined, "v2 does not use the v1 amount field");
       assert.equal(entry.scheme, "exact");
       assert.equal(entry.asset, "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913");
       assert.equal(entry.payTo, PAY_TO);

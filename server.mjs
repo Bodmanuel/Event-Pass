@@ -363,6 +363,14 @@ export async function createEventPass(env = process.env) {
     try {
       verification = await verifyPayment(config.facilitator, settlementRequest);
     } catch (error) {
+      // Which envelope and which `accepted` fields the client actually sent.
+      // Keys only — never the payload's values, signature or authorization.
+      console.warn(`[eventpass] facilitator verify failed ${JSON.stringify({
+        orderId: order.orderId,
+        x402Version: settlementRequest.x402Version,
+        topLevelKeys: Object.keys(presented.payload),
+        acceptedKeys: Object.keys(presented.payload.accepted ?? {}),
+      })}`);
       res.status(502).json({ error: `Could not verify the payment: ${error.message}` });
       return;
     }

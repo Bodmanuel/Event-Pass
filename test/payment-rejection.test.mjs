@@ -103,5 +103,5 @@ test("returns a challenge, and no error, when no payment is presented at all", a
   assert.equal(response.status, 402);
   const body = await response.json();
   assert.equal(body.error, undefined, "an unpaid request is a challenge, not an error");
-  assert.equal(body.accepts[0].maxAmountRequired, "9500000");
+  assert.equal(body.accepts[0].amount, "9500000");
 });
