@@ -10,7 +10,7 @@ import { createPostgresStore } from "./lib/store-postgres.mjs";
 import { createPgDriver } from "./lib/drivers/pg.mjs";
 import {
   BASE_CAIP2, USDC_BASE, buildChallenge, paymentResponseHeader,
-  readPaymentPayload, resolveFacilitator, selectRequirement, settlePayment, validatePaymentPayload, verifyPayment,
+  readPaymentPayload, redactForDiagnostics, resolveFacilitator, selectRequirement, settlePayment, validatePaymentPayload, verifyPayment,
 } from "./lib/x402.mjs";
 // TEMPORARY — the $0.10 x402 smoke test. Remove with the routes below.
 import { SMOKE_AMOUNT_USDC, probeFacilitatorAuth, settleSmoke, smokeChallenge, smokeConfig, smokeReport } from "./lib/x402-smoke.mjs";
@@ -371,6 +371,9 @@ export async function createEventPass(env = process.env) {
         topLevelKeys: Object.keys(presented.payload),
         acceptedKeys: Object.keys(presented.payload.accepted ?? {}),
       })}`);
+      // The exact body CDP rejected, with signatures, nonces and addresses
+      // masked. Keys, types and nesting stay visible for a schema comparison.
+      console.warn(`[eventpass] facilitator verify request ${JSON.stringify(redactForDiagnostics(settlementRequest))}`);
       res.status(502).json({ error: `Could not verify the payment: ${error.message}` });
       return;
     }

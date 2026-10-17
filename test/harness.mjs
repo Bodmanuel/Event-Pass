@@ -171,7 +171,7 @@ export function paymentHeaderV2(overrides = {}) {
     payTo: to,
     ...(v1Accepted ? { maxAmountRequired: amount } : { amount }),
     maxTimeoutSeconds: 300,
-    extra: { name: "USDC", version: "2" },
+    extra: { name: "USD Coin", version: "2" },
   };
   if (omitScheme) delete accepted.scheme;
   if (omitNetwork) delete accepted.network;
