@@ -109,7 +109,15 @@ export function backends(postgres) {
 export async function startApi(env = {}, postgres) {
   const { createEventPass } = await import("../server.mjs");
   if (env.DATABASE_URL && postgres) await postgres.reset();
-  const { app, store, config, close } = await createEventPass({ TICKET_SECRET: "test-secret", ORGANIZER_KEY, ...env });
+  const { app, store, config, close } = await createEventPass({
+    TICKET_SECRET: "test-secret",
+    ORGANIZER_KEY,
+    // This suite's loopback facilitator is deliberately credential-free. In
+    // production that mode is opt-in, so the harness opts in explicitly; a test
+    // exercising the production default overrides this with "".
+    X402_ALLOW_UNAUTHENTICATED_FACILITATOR: "1",
+    ...env,
+  });
   const server = await new Promise((resolve) => { const started = app.listen(0, () => resolve(started)); });
   const base = `http://127.0.0.1:${server.address().port}`;
   return {

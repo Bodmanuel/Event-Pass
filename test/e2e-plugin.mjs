@@ -38,6 +38,9 @@ async function startApi(facilitatorUrl) {
     ORGANIZER_KEY,
     X402_PAY_TO: PAY_TO,
     X402_FACILITATOR_URL: facilitatorUrl,
+    // The demo facilitator below accepts anything; the unauthenticated mode is
+    // opt-in in production, so this script opts in explicitly.
+    X402_ALLOW_UNAUTHENTICATED_FACILITATOR: "1",
     PUBLIC_BASE_URL: PAYMENT_RESOURCE_ORIGIN,
     // Set DATABASE_URL to run the same demo against PostgreSQL rather than memory.
     ...(process.env.DATABASE_URL ? { DATABASE_URL: process.env.DATABASE_URL } : {}),

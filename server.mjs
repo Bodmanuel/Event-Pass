@@ -208,9 +208,11 @@ export async function createEventPass(env = process.env) {
       x402: {
         payToConfigured: Boolean(config.payTo),
         facilitatorConfigured: Boolean(config.facilitator),
-        // Which mode won — a name, never a credential. Makes a 401 diagnosable
-        // from outside without reading logs that do not exist.
-        authentication: config.facilitator?.auth?.mode ?? "none",
+        // Which mode won — a name, never a credential. "misconfigured" means a
+        // facilitator is set but its pay endpoint will answer 503.
+        authentication: config.facilitator
+          ? (config.facilitator.auth?.mode ?? "misconfigured")
+          : "none",
         version: config.x402Version,
       },
     });

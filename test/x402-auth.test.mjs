@@ -318,6 +318,77 @@ test("a payment logs neither the secret nor a JWT", async (t) => {
   assert.ok(!/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/.test(output), "a JWT must never be logged");
 });
 
+test("a production-style configuration with no authentication fails closed", async (t) => {
+  const facilitator = await startFacilitator();
+  // The harness normally opts a loopback facilitator into the explicit
+  // unauthenticated mode. An empty value restores the production default: no
+  // credentials configured and no opt-in.
+  const api = await startApi({
+    X402_PAY_TO: PAY_TO,
+    X402_FACILITATOR_URL: facilitator.url,
+    X402_ALLOW_UNAUTHENTICATED_FACILITATOR: "",
+  });
+  t.after(async () => { await api.close(); await facilitator.close(); });
+
+  const created = await reserve(api.base, { eventId: "evt_afrogroove_2026", tierId: "tier_ga", quantity: 1 });
+  assert.equal(created.status, 201);
+  const order = await created.json();
+
+  const response = await fetch(`${api.base}/v1/orders/${order.orderId}/pay`);
+  assert.equal(response.status, 503, "an unauthenticated production configuration must not present a challenge");
+  const body = await response.json();
+  assert.ok(
+    body.problems.some((p) => p.includes("No facilitator authentication is configured")),
+    "the refusal must name the missing authentication",
+  );
+
+  assert.equal(facilitator.calls.verify, 0, "no unauthenticated verify call may be made");
+  assert.equal(facilitator.calls.settle, 0, "no unauthenticated settle call may be made");
+
+  const view = await (await fetch(`${api.base}/v1/orders/${order.orderId}`)).json();
+  assert.equal(view.status, "awaiting_payment");
+  assert.equal(view.tickets.length, 0);
+
+  const health = await (await fetch(`${api.base}/healthz`)).json();
+  assert.equal(health.x402.authentication, "misconfigured", "healthz must not report a usable mode");
+});
+
+test("the unauthenticated facilitator mode is explicit and sends no credential", async (t) => {
+  const facilitator = await startFacilitator();
+  // The harness sets X402_ALLOW_UNAUTHENTICATED_FACILITATOR=1; this asserts what
+  // that mode actually does on the wire.
+  const api = await startApi({ X402_PAY_TO: PAY_TO, X402_FACILITATOR_URL: facilitator.url });
+  t.after(async () => { await api.close(); await facilitator.close(); });
+
+  const { response } = await orderAndPay(api);
+  assert.equal(response.status, 200);
+  assert.deepEqual(
+    facilitator.calls.authorization,
+    [null, null],
+    "an explicitly unauthenticated call must carry no Authorization header",
+  );
+
+  const health = await (await fetch(`${api.base}/healthz`)).json();
+  assert.equal(health.x402.authentication, "none");
+});
+
+test("bearer tokens take precedence over the explicit unauthenticated mode", async (t) => {
+  const facilitator = await startFacilitator();
+  const api = await startApi({
+    X402_PAY_TO: PAY_TO,
+    X402_FACILITATOR_URL: facilitator.url,
+    X402_VERIFY_TOKEN: "verify-token",
+    X402_SETTLE_TOKEN: "settle-token",
+    // The harness already sets the opt-in flag; a configured credential must win.
+    X402_ALLOW_UNAUTHENTICATED_FACILITATOR: "1",
+  });
+  t.after(async () => { await api.close(); await facilitator.close(); });
+
+  const { response } = await orderAndPay(api);
+  assert.equal(response.status, 200);
+  assert.deepEqual(facilitator.calls.authorization, ["Bearer verify-token", "Bearer settle-token"]);
+});
+
 test("healthz reports the authentication mode and no credential", async (t) => {
   const { secret } = cdpSecret();
   const facilitator = await startFacilitator();
