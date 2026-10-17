@@ -336,6 +336,13 @@ export async function createEventPass(env = process.env) {
     // never reaches the facilitator or the store.
     const check = validatePaymentPayload({ payload: presented.payload, order, payTo: config.payTo });
     if (!check.ok) {
+      // Safe diagnostics only: the shape that arrived and the check that failed.
+      // Keys and a reason string — never the signature or the authorization.
+      console.warn(`[eventpass] x402 payment rejected ${JSON.stringify({
+        orderId: order.orderId,
+        topLevelKeys: Object.keys(presented.payload),
+        reason: check.reason,
+      })}`);
       res.status(402).json({ ...challenge, error: check.reason });
       return;
     }

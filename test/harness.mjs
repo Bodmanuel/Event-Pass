@@ -147,6 +147,40 @@ export function paymentHeader(overrides = {}) {
   return { [header]: Buffer.from(JSON.stringify(payload), "utf8").toString("base64") };
 }
 
+/**
+ * The same payment in the x402 v2 shape PayBox sends: the scheme, network and
+ * asset live under `accepted`, with no top-level copies. `omitScheme` and
+ * `omitNetwork` remove the field from `accepted` entirely, which is how a
+ * genuinely scheme-less payload is represented.
+ */
+export function paymentHeaderV2(overrides = {}) {
+  const {
+    network = "eip155:8453", x402Version = 2, amount = "19000000", to = PAY_TO,
+    asset = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", scheme = "exact",
+    validAfter = "0", validBefore = "9999999999", nonce = `0x${"ef".repeat(32)}`,
+    signature = `0x${"cd".repeat(65)}`, from = PAYER, header = "PAYMENT-SIGNATURE",
+    omitScheme = false, omitNetwork = false,
+  } = overrides;
+  const accepted = {
+    scheme,
+    network,
+    asset,
+    payTo: to,
+    maxAmountRequired: amount,
+    maxTimeoutSeconds: 300,
+    extra: { name: "USDC", version: "2" },
+  };
+  if (omitScheme) delete accepted.scheme;
+  if (omitNetwork) delete accepted.network;
+  const payload = {
+    x402Version,
+    resource: { url: "https://example.test/pay", description: "test payment", mimeType: "application/json" },
+    accepted,
+    payload: { signature, authorization: { from, to, value: amount, validAfter, validBefore, nonce } },
+  };
+  return { [header]: Buffer.from(JSON.stringify(payload), "utf8").toString("base64") };
+}
+
 export const reserve = (base, body) =>
   fetch(`${base}/v1/orders`, {
     method: "POST",
