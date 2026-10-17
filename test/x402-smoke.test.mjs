@@ -15,7 +15,7 @@ import { createPublicKey, randomBytes, verify as verifySignature } from "node:cr
 
 import { PAY_TO, paymentHeader, startApi, startFacilitator } from "./harness.mjs";
 import {
-  SMOKE_AMOUNT_ATOMIC, cdpJwt, ed25519FromSeed, seedFromCdpSecret, settleSmoke, smokeConfig,
+  SMOKE_AMOUNT_ATOMIC, cdpJwt, ed25519FromSeed, probeFacilitatorAuth, seedFromCdpSecret, settleSmoke, smokeConfig,
 } from "../lib/x402-smoke.mjs";
 
 const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
@@ -246,6 +246,63 @@ test("the smoke routes never create an order or move inventory", async (t) => {
   assert.equal(healthAfter.orders, healthBefore.orders, "no order may be created by the smoke test");
   assert.equal(healthAfter.tickets, 0, "no ticket may be issued by the smoke test");
   assert.equal(stockAfter, stockBefore, "inventory must be untouched");
+});
+
+// A CDP facilitator is mounted under a path prefix, and CDP signs the request
+// target into the token. The first version of this module built the `uri` claim
+// from the host plus the endpoint suffix, so a request to
+// /platform/v2/x402/verify was signed as `POST api.cdp.coinbase.com/verify` and
+// came back 401 with a perfectly valid API key. These two pin the whole path.
+const CDP_BASE = "https://api.cdp.coinbase.com/platform/v2/x402";
+
+/** Captures the URL and the `uri` claim of every call, and answers with `reply(url)`. */
+function recordingFetchImpl(seen, reply) {
+  return async (url, init) => {
+    const claims = JSON.parse(Buffer.from(init.headers.authorization.slice("Bearer ".length).split(".")[1], "base64url").toString("utf8"));
+    seen.push({ url, uri: claims.uri });
+    const { status = 200, body = {} } = reply(url);
+    return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+  };
+}
+
+test("the auth probe signs the facilitator's whole path, prefix included", async () => {
+  const config = smokeConfig({
+    X402_SMOKE_TEST_ENABLED: "1", X402_PAY_TO: PAY_TO, X402_FACILITATOR_URL: CDP_BASE,
+    CDP_API_KEY_ID: "key-id", CDP_API_KEY_SECRET: cdpSecret().secret,
+  });
+  assert.equal(config.ok, true, config.problems.join(" "));
+
+  const seen = [];
+  // 400 about the payload: the request authenticated, which is the whole test.
+  const probe = await probeFacilitatorAuth(config, { fetchImpl: recordingFetchImpl(seen, () => ({ status: 400 })) });
+
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].url, `${CDP_BASE}/verify`, "the probe must call the prefixed endpoint");
+  assert.equal(seen[0].uri, "POST api.cdp.coinbase.com/platform/v2/x402/verify", "the token must name the prefixed path");
+  assert.equal(probe.uri, seen[0].uri, "the report must show the target the token claimed");
+  assert.equal(probe.authOk, true, "a 400 about the payload is not an authentication failure");
+});
+
+test("settlement signs the whole path for both verify and settle", async () => {
+  const config = smokeConfig({
+    X402_SMOKE_TEST_ENABLED: "1", X402_PAY_TO: PAY_TO, X402_FACILITATOR_URL: CDP_BASE,
+    CDP_API_KEY_ID: "key-id", CDP_API_KEY_SECRET: cdpSecret().secret,
+  });
+  const payload = JSON.parse(Buffer.from(Object.values(paymentHeader({ amount: "100000" }))[0], "base64").toString("utf8"));
+
+  const seen = [];
+  const fetchImpl = recordingFetchImpl(seen, (url) => ({
+    body: url.endsWith("/verify") ? { isValid: true } : { success: true, transaction: "0x0", payer: "0x0" },
+  }));
+
+  const result = await settleSmoke({ config, payload, origin: "https://eventpass-api.vercel.app", fetchImpl });
+  assert.equal(result.ok, true, result.reason);
+
+  assert.deepEqual(seen.map((call) => call.url), [`${CDP_BASE}/verify`, `${CDP_BASE}/settle`]);
+  assert.deepEqual(seen.map((call) => call.uri), [
+    "POST api.cdp.coinbase.com/platform/v2/x402/verify",
+    "POST api.cdp.coinbase.com/platform/v2/x402/settle",
+  ]);
 });
 
 test("the four product tools' routes are unaffected by the smoke routes", async (t) => {
