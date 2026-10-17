@@ -12,6 +12,8 @@ import {
   BASE_CAIP2, USDC_BASE, buildChallenge, paymentResponseHeader,
   readPaymentPayload, selectRequirement, settlePayment, validatePaymentPayload, verifyPayment,
 } from "./lib/x402.mjs";
+// TEMPORARY — the $0.10 x402 smoke test. Remove with the routes below.
+import { SMOKE_AMOUNT_USDC, probeFacilitatorAuth, settleSmoke, smokeChallenge, smokeConfig, smokeReport } from "./lib/x402-smoke.mjs";
 
 const publicDir = join(dirname(fileURLToPath(import.meta.url)), "public");
 
@@ -367,6 +369,75 @@ export async function createEventPass(env = process.env) {
       .set("PAYMENT-RESPONSE", paymentResponseHeader(settlement))
       .json({ status: settled.status, settled: true, ...(await viewOrder(settled, baseUrlOf(req))) });
   })));
+
+  // ------------------------------------------- TEMPORARY x402 smoke test
+  //
+  // Delete this whole section, `lib/x402-smoke.mjs`, `test/x402-smoke.test.mjs`
+  // and `src/plugin.smoke.ts` in the plugin when the $0.10 test is done.
+  //
+  // It shares nothing with the order flow on purpose: no store call, no
+  // reservation, no ticket. `config` is read here only for the x402 version and
+  // the payee address; `store` is never touched, so these routes cannot create an
+  // order or move inventory even if they are called in a loop.
+  //
+  // Both routes 404 unless X402_SMOKE_TEST_ENABLED is set, so a deployment with
+  // the flag unset is indistinguishable from one without this code.
+
+  const smoke = () => smokeConfig(env);
+
+  app.get("/v1/x402/smoke", route(async (req, res) => {
+    const config = smoke();
+    if (!config.enabled) { res.status(404).json({ error: "Not found." }); return; }
+
+    const report = smokeReport(config, payOriginOf(req));
+    const probe = config.ok ? await probeFacilitatorAuth(config) : { authOk: false, status: null, detail: "Configuration is incomplete, so the facilitator was not called." };
+    res.status(config.ok ? 200 : 503).json({ ...report, configured: config.ok, problems: config.problems, probe });
+  }));
+
+  app.get("/v1/x402/smoke/pay", route(async (req, res) => {
+    const config = smoke();
+    if (!config.enabled) { res.status(404).json({ error: "Not found." }); return; }
+
+    // Fail closed before anything else: an unverified configuration must not
+    // produce a challenge that looks payable.
+    if (!config.ok) {
+      res.status(503).json({
+        error: "The x402 smoke test is not correctly configured, so no payment was requested.",
+        problems: config.problems,
+      });
+      return;
+    }
+
+    const origin = payOriginOf(req);
+    const challenge = smokeChallenge({ origin, payTo: config.payTo, version: config.x402Version });
+    const presented = readPaymentPayload(req.headers);
+    if (!presented || presented.error) {
+      // The unpaid challenge. Nothing has been verified, settled or charged.
+      res.status(402)
+        .set("PAYMENT-REQUIRED", Buffer.from(JSON.stringify(challenge), "utf8").toString("base64"))
+        .json(presented?.error ? { ...challenge, error: presented.error } : challenge);
+      return;
+    }
+
+    const result = await settleSmoke({ config, payload: presented.payload, origin });
+    if (!result.ok) {
+      const status = result.code === "invalid_payment" || result.code === "invalid_payload" ? 402 : 502;
+      res.status(status).json({ ...challenge, error: result.reason, code: result.code });
+      return;
+    }
+    res.status(200).json({
+      smokeTest: true,
+      settled: true,
+      transactionHash: result.transactionHash,
+      payer: result.payer,
+      payTo: config.payTo,
+      network: result.network,
+      asset: config.asset,
+      amountAtomic: result.amountAtomic,
+      amountUsdc: SMOKE_AMOUNT_USDC,
+      note: "A USDC transfer settled. No order was created and no ticket was issued.",
+    });
+  }));
 
   // ---------------------------------------------------- organizer check-in
 
