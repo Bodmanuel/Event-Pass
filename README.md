@@ -8,8 +8,8 @@ Two pieces:
 
 | Path | What it is |
 |---|---|
-| `../eventpass-plugin/` | The PayBox plugin. Builds to `dist/plugin.mjs`, which is what you upload. |
-| `eventpass-api/` (this repo) | The EventPass API: inventory, orders, the x402 payment gate, ticket issuance and redemption. |
+| `plugin/` | The PayBox plugin. Builds to `plugin/dist/plugin.mjs`, which is what you upload. |
+| `.` (repo root) | The EventPass API: inventory, orders, the x402 payment gate, ticket issuance and redemption. |
 
 ## Why the plugin is thin
 
@@ -81,17 +81,25 @@ Needs Node.js 24 (the plugin's pinned `pnpm test` requires exactly 24.x — Node
 fails its environment check).
 
 ```bash
-cd eventpass-api
 pnpm install
 cp .env.example .env      # fill in TICKET_SECRET, ORGANIZER_KEY, X402_PAY_TO, X402_FACILITATOR_URL
 pnpm start                # http://127.0.0.1:8787  (dashboard at /dashboard)
 ```
 
 ```bash
-pnpm test                 # 72 tests across both storage backends, stub facilitator, no funds
+pnpm test                 # 130 tests across both storage backends, stub facilitator, no funds
 pnpm test:live            # 6 read-only checks against the deployed API (needs network)
-pnpm e2e                  # drives the real dist/plugin.mjs over MCP stdio end to end
+pnpm e2e                  # drives the real plugin/dist/plugin.mjs over MCP stdio end to end
 DATABASE_URL=... pnpm e2e # the same demo against PostgreSQL
+```
+
+The plugin is built separately:
+
+```bash
+cd plugin
+pnpm install
+pnpm build                # writes plugin/dist/plugin.mjs (the artifact uploaded to PayBox)
+pnpm test                 # PayBox conformance suite (requires Node 24.x)
 ```
 
 The stub facilitator in the tests is a test double only — the server always calls
@@ -134,27 +142,39 @@ testnet-oriented, so mainnet usually means the Coinbase CDP facilitator with API
 keys. PayBox only supports Base and Solana mainnet for x402, so a testnet demo is
 not an option: the demo purchase is a real, small USDC payment.
 
-### One thing to confirm in the portal
+### x402 version and wire shape
 
-x402 v1 names the chain `"base"` and uses the `X-PAYMENT` header; v2 uses CAIP-2
-`"eip155:8453"` with `PAYMENT-REQUIRED` / `PAYMENT-SIGNATURE` / `PAYMENT-RESPONSE`.
-PayBox's public docs do not state which it sends — there is no mention of
-`x402Version`, `PAYMENT-REQUIRED`, `PAYMENT-SIGNATURE` or `X-PAYMENT` anywhere in
-`skill.md` or `requirements.md`. What *is* documented is that `proposeX402` takes
-CAIP-2 `eip155:8453`, which is the v2 convention, so **v2 is the default here**.
+PayBox speaks x402 **v2**, so `X402_VERSION=2` (the default) is what runs in
+production. The challenge then advertises exactly one requirement in the v2
+vocabulary:
 
-The flow does not depend on getting that guess right, because this service hedges:
+```json
+{"scheme":"exact","network":"eip155:8453","amount":"9500000",
+ "asset":"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+ "payTo":"0x…","maxTimeoutSeconds":300,
+ "extra":{"name":"USD Coin","version":"2"}}
+```
 
-- the 402 challenge advertises **both** network spellings in `accepts` and carries
-  both the v1 per-accept `resource` and the v2 top-level `resource`,
-- it sets `PAYMENT-REQUIRED` **and** accepts **either** `PAYMENT-SIGNATURE` or
-  `X-PAYMENT`, and
-- it echoes back whichever `x402Version` the client presented when calling the
-  facilitator.
+with the resource descriptor (`url`, `description`, `mimeType`) at the top level
+and `PAYMENT-REQUIRED` / `PAYMENT-SIGNATURE` / `PAYMENT-RESPONSE` headers.
+`X402_VERSION=1` switches to the legacy shape: the `"base"` network spelling
+with `maxAmountRequired` on each accept. The gate accepts either payment header.
 
-The only thing `X402_VERSION` changes is the version number reported in the
-envelope body. Confirm it from the portal's payment preview if you can; a mismatch
-there is cosmetic, not a reason tickets fail to issue.
+Two details matter more than the version number, and both were learned from live
+CDP rejections:
+
+- **`extra` must carry the token's EIP-712 domain, not its ticker.** USDC on Base
+  reports `name() = "USD Coin"` and `version() = "2"`. A client builds its
+  EIP-3009 signature from `extra`, so advertising `"USDC"` signs against the
+  wrong domain and the facilitator's on-chain simulation reverts with
+  `invalid_payload` (`contract call failed: … execution reverted`).
+- **v2 terms live under `accepted`.** The gate reads `scheme`, `network` and
+  `asset` from `paymentPayload.accepted` when present (v1 keeps them at the top
+  level), requires the echoed `accepted` to be v2-shaped and to match the
+  reserved amount, payee and asset, and forwards it **unchanged** as
+  `paymentRequirements`. A v1-shaped `accepted` is refused before the
+  facilitator is called, because CDP answers it with
+  `'paymentPayload' is invalid: must match one of [x402V2PaymentPayload…]`.
 
 ## Configuring the plugin in the PayBox portal
 
@@ -164,7 +184,7 @@ Under **Test & configure**:
    For the current deployment that is `eventpass-api.vercel.app`.
 2. **Variables & Secrets** — add an *Environment variable* `EVENTPASS_API_URL` set to
    `https://<your-api-host>` (no trailing slash).
-3. Upload `dist/plugin.mjs` from the plugin project, then run the hosted checks.
+3. Upload `plugin/dist/plugin.mjs` from this repo, then run the hosted checks.
 
 No secret goes in the bundle. The plugin reads only `EVENTPASS_API_URL`, and
 defaults to `https://eventpass-api.vercel.app` when it is unset — the artifact
@@ -194,7 +214,7 @@ plugin declines, nothing is charged, and the held inventory is released.
 ## Going to production
 
 This API is deployed on Vercel at **https://eventpass-api.vercel.app**, which is
-what `dist/plugin.mjs` targets by default.
+what `plugin/dist/plugin.mjs` targets by default.
 
 ```bash
 vercel deploy --prod \
@@ -235,11 +255,11 @@ curl -i https://<host>/v1/orders/<id>/pay
 ```
 
 The last one is the important one, and it costs nothing: with payment configured
-it returns **402** with a `PAYMENT-REQUIRED` header and an `accepts` array naming
-`eip155:8453`, the configured `payTo`, USDC on Base, and the exact reserved
-`maxAmountRequired`. Without payment configured it returns **501** and issues
-nothing. Either way, no ticket exists afterwards — `GET /v1/orders/<id>` will
-show an empty `tickets` array.
+it returns **402** with a `PAYMENT-REQUIRED` header and a single v2 `accepts`
+entry naming `eip155:8453`, the configured `payTo`, USDC on Base, and the exact
+reserved `amount` (plus the USDC EIP-712 domain in `extra`). Without payment
+configured it returns **501** and issues nothing. Either way, no ticket exists
+afterwards — `GET /v1/orders/<id>` will show an empty `tickets` array.
 
 These same checks run as a suite:
 
@@ -249,20 +269,20 @@ pnpm test:live        # skips unless EVENTPASS_LIVE=1; read-only, never pays
 
 It is skipped by default so the normal suite stays hermetic. The live suite is
 the only place that proves the *built* artifact reaches the deployment: it runs
-`dist/plugin.mjs` with no `EVENTPASS_API_URL` and no `NODE_ENV` and asserts the
+`plugin/dist/plugin.mjs` with no `EVENTPASS_API_URL` and no `NODE_ENV` and asserts the
 result says `source: "live"`.
 
-### What is still missing here
+### Deployment status
 
-- **No x402 payment configuration**, so the pay endpoint returns 501 and no
-  ticket can be issued. That is deliberate until a receiving address and a
-  Base-mainnet facilitator are supplied. This is the only thing standing between
-  the deployment and a complete purchase.
+The production deployment is fully configured: Supabase Postgres behind the
+API, and the Coinbase CDP facilitator on Base mainnet (`eip155:8453`) with
+short-lived EdDSA JWTs — `/healthz` reports `authentication: "cdp-jwt"` and
+`storage: "postgres"`. Tickets are issued only after the facilitator both
+verifies and settles a payment; a settled purchase is visible as tickets in
+`/healthz`'s `tickets` count and in the order record.
 
-The database is live: Supabase Postgres via the transaction pooler, with the
-schema applied and AfroGroove Fest seeded on cold start. `/healthz` reports
-`storage: "postgres"`; if it ever reports `memory`, the deployment has lost its
-database and is not durable.
+If `storage` ever reports `memory`, the deployment has lost its database and is
+not durable. The schema is applied and AfroGroove Fest is seeded on cold start.
 
 Tickets are never issued by any path that has not seen a settled payment, so an
 unconfigured or wrongly-configured deployment fails closed rather than handing
