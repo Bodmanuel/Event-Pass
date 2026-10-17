@@ -1,0 +1,25 @@
+{
+  "name": "eventpass-api",
+  "version": "1.0.0",
+  "description": "",
+  "scripts": {
+    "test": "node --test --test-timeout=90000 test/*.test.mjs",
+    "test:live": "EVENTPASS_LIVE=1 node --test --test-timeout=90000 test/live.test.mjs",
+    "start": "node server.mjs",
+    "migrate": "node scripts/migrate.mjs",
+    "e2e": "node test/e2e-plugin.mjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "main": "index.js",
+  "type": "module",
+  "dependencies": {
+    "express": "4.21.2",
+    "pg": "8.13.1",
+    "qrcode": "1.5.4"
+  },
+  "devDependencies": {
+    "embedded-postgres": "18.4.0-beta.17"
+  }
+}

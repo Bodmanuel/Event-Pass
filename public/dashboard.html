@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EventPass — Organizer check-in</title>
+<style>
+  :root{--bg:#0b0b10;--card:#15151d;--line:#2a2a38;--ink:#f4f4f6;--dim:#9a9ab0;--ok:#31c48d;--bad:#f0616d;--warn:#e3a008}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 ui-sans-serif,system-ui,-apple-system,sans-serif;padding:20px}
+  .wrap{max-width:820px;margin:0 auto}
+  h1{font-size:20px;margin:0 0 2px}
+  .sub{color:var(--dim);font-size:13px;margin:0 0 20px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;margin-bottom:16px}
+  label{display:block;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);margin-bottom:6px}
+  input,button{font:inherit;border-radius:10px;border:1px solid var(--line);background:#0e0e15;color:var(--ink);padding:11px 13px}
+  input{width:100%}
+  .row{display:flex;gap:10px;flex-wrap:wrap}
+  .row>input{flex:1 1 260px;width:auto}
+  button{cursor:pointer;background:#232334;font-weight:600;white-space:nowrap}
+  button.primary{background:#4f46e5;border-color:#4f46e5}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  #banner{border-radius:14px;padding:22px;text-align:center;font-size:26px;font-weight:700;letter-spacing:.02em;margin-bottom:16px;display:none}
+  #banner small{display:block;font-size:13px;font-weight:400;letter-spacing:0;margin-top:6px;opacity:.9}
+  .admitted{background:color-mix(in srgb,var(--ok) 22%,transparent);border:1px solid var(--ok);color:#b9f5dd}
+  .rejected{background:color-mix(in srgb,var(--bad) 20%,transparent);border:1px solid var(--bad);color:#ffd4d8}
+  .info{background:color-mix(in srgb,var(--warn) 18%,transparent);border:1px solid var(--warn);color:#ffe9b3}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:9px 8px;border-bottom:1px solid var(--line);vertical-align:middle}
+  th{color:var(--dim);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+  td code{font-size:11px;color:var(--dim);word-break:break-all}
+  img.qr{width:52px;height:52px;background:#fff;border-radius:6px;padding:3px}
+  .chip{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--line);white-space:nowrap}
+  .chip.valid{color:var(--ok);border-color:var(--ok)}
+  .chip.redeemed{color:var(--dim)}
+  video{width:100%;border-radius:12px;border:1px solid var(--line);display:none;margin-top:12px;background:#000}
+  .muted{color:var(--dim);font-size:12px}
+  .scroll{overflow-x:auto}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>EventPass — Organizer check-in</h1>
+  <p class="sub">Scan or paste a ticket code. Each code is admitted exactly once.</p>
+
+  <div class="card">
+    <label for="key">Organizer key</label>
+    <div class="row">
+      <input id="key" type="password" placeholder="x-organizer-key" autocomplete="off">
+      <button id="save" class="primary">Save key</button>
+    </div>
+    <p class="muted" id="keystate" style="margin:10px 0 0">Stored in this browser only (sessionStorage).</p>
+  </div>
+
+  <div id="banner"></div>
+
+  <div class="card">
+    <label for="code">Ticket code</label>
+    <div class="row">
+      <input id="code" placeholder="EVPP1.…" autocomplete="off" spellcheck="false">
+      <button id="redeem" class="primary">Admit</button>
+      <button id="camera">Use camera</button>
+    </div>
+    <video id="video" playsinline muted></video>
+    <p class="muted" id="cameraNote" style="margin:10px 0 0"></p>
+  </div>
+
+  <div class="card">
+    <div class="row" style="justify-content:space-between;align-items:center">
+      <div><label style="margin:0">Issued tickets</label></div>
+      <button id="refresh">Refresh</button>
+    </div>
+    <div class="scroll" style="margin-top:12px">
+      <table>
+        <thead><tr><th>QR</th><th>Ticket</th><th>Holder</th><th>Status</th><th></th></tr></thead>
+        <tbody id="rows"><tr><td colspan="5" class="muted">Enter the organizer key to load tickets.</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+const EVENT_ID = "evt_afrogroove_2026";
+const $ = (id) => document.getElementById(id);
+const keyInput = $("key");
+
+try { keyInput.value = sessionStorage.getItem("eventpass.key") ?? ""; } catch {}
+
+function banner(kind, title, detail) {
+  const el = $("banner");
+  el.className = kind;
+  el.innerHTML = `${title}${detail ? `<small>${detail}</small>` : ""}`;
+  el.style.display = "block";
+}
+
+async function api(path, options = {}) {
+  const response = await fetch(path, {
+    ...options,
+    headers: { "content-type": "application/json", "x-organizer-key": keyInput.value, ...options.headers },
+  });
+  const body = await response.json().catch(() => ({}));
+  return { status: response.status, body };
+}
+
+$("save").onclick = () => {
+  try { sessionStorage.setItem("eventpass.key", keyInput.value); } catch {}
+  $("keystate").textContent = keyInput.value ? "Key saved for this tab." : "Key cleared.";
+  loadTickets();
+};
+
+async function redeem(code) {
+  const value = String(code ?? $("code").value).trim();
+  if (!value) return;
+  const { status, body } = await api("/v1/organizer/redeem", { method: "POST", body: JSON.stringify({ code: value }) });
+
+  if (body.result === "redeemed") {
+    banner("admitted", "ADMITTED", `${body.ticket.tierName}${body.ticket.holderName ? ` · ${body.ticket.holderName}` : ""} · ${body.ticket.ticketId}`);
+    $("code").value = "";
+  } else if (body.result === "already_redeemed") {
+    banner("rejected", "ALREADY REDEEMED", `First admitted ${new Date(body.ticket.redeemedAt).toLocaleString()} · ${body.ticket.ticketId}`);
+  } else if (body.result === "void") {
+    banner("rejected", "TICKET VOID", body.ticket?.ticketId ?? value);
+  } else if (status === 401 || status === 503) {
+    banner("info", "ORGANIZER KEY NEEDED", body.error);
+  } else {
+    banner("rejected", "NOT VALID", body.error ?? "This code was not issued by EventPass.");
+  }
+  loadTickets();
+}
+
+$("redeem").onclick = () => redeem();
+$("code").addEventListener("keydown", (event) => { if (event.key === "Enter") redeem(); });
+$("refresh").onclick = loadTickets;
+
+async function loadTickets() {
+  if (!keyInput.value) return;
+  const { status, body } = await api(`/v1/organizer/tickets?eventId=${encodeURIComponent(EVENT_ID)}`);
+  const rows = $("rows");
+  if (status !== 200) {
+    rows.innerHTML = `<tr><td colspan="5" class="muted">${body.error ?? "Could not load tickets."}</td></tr>`;
+    return;
+  }
+  if (!body.tickets.length) {
+    rows.innerHTML = '<tr><td colspan="5" class="muted">No tickets issued yet for this event.</td></tr>';
+    return;
+  }
+  rows.innerHTML = body.tickets.map((ticket) => `
+    <tr>
+      <td><img class="qr" alt="" src="${ticket.qrImageUrl}"></td>
+      <td><strong>${ticket.tierName}</strong><br><code>${ticket.ticketId}</code></td>
+      <td>${ticket.holderName ?? '<span class="muted">—</span>'}</td>
+      <td><span class="chip ${ticket.status}">${ticket.status}</span></td>
+      <td><button data-code="${ticket.qrPayload.split("/t/")[1]}">Admit</button></td>
+    </tr>`).join("");
+  rows.querySelectorAll("button[data-code]").forEach((button) => {
+    button.onclick = () => redeem(decodeURIComponent(button.dataset.code));
+  });
+}
+
+// Camera scanning uses the built-in BarcodeDetector where the browser provides it.
+const video = $("video");
+$("camera").onclick = async () => {
+  if (!("BarcodeDetector" in window)) {
+    $("cameraNote").textContent = "This browser has no built-in QR detector — open the QR on a phone, or paste the code.";
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+    video.srcObject = stream;
+    video.style.display = "block";
+    await video.play();
+    const detector = new BarcodeDetector({ formats: ["qr_code"] });
+    $("cameraNote").textContent = "Point the camera at a ticket QR code.";
+    const tick = async () => {
+      if (!video.srcObject) return;
+      const [found] = await detector.detect(video);
+      if (found?.rawValue) {
+        stream.getTracks().forEach((track) => track.stop());
+        video.srcObject = null;
+        video.style.display = "none";
+        $("cameraNote").textContent = "";
+        redeem(decodeURIComponent(found.rawValue.replace(/^.*\/t\//, "")));
+        return;
+      }
+      requestAnimationFrame(tick);
+    };
+    tick();
+  } catch (error) {
+    $("cameraNote").textContent = `Camera unavailable: ${error.message}`;
+  }
+};
+
+loadTickets();
+</script>
+</body>
+</html>

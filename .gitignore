@@ -1,0 +1,8 @@
+.vercel
+node_modules
+
+# Real secrets live here (TICKET_SECRET, ORGANIZER_KEY, DATABASE_URL). Only
+# .env.example is ever committed.
+.env
+.env.*
+!.env.example
