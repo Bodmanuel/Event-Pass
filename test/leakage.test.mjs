@@ -70,7 +70,13 @@ test("no response leaks a secret, a credential or a database detail", async (t) 
   }
 
   // The health endpoint reports whether payment is configured, never the values.
+  // `authentication` is a mode name ("bearer", "cdp-jwt" or "none"), not a secret.
   const health = await (await fetch(`${api.base}/healthz`)).json();
-  assert.deepEqual(Object.keys(health.x402).sort(), ["facilitatorConfigured", "payToConfigured", "version"]);
+  assert.deepEqual(
+    Object.keys(health.x402).sort(),
+    ["authentication", "facilitatorConfigured", "payToConfigured", "version"],
+  );
   assert.equal(health.x402.payToConfigured, true);
+  assert.equal(health.x402.authentication, "bearer", "static tokens are the configured mode here");
+  assert.ok(["none", "bearer", "cdp-jwt"].includes(health.x402.authentication));
 });

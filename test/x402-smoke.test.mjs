@@ -14,16 +14,22 @@ import test from "node:test";
 import { createPublicKey, randomBytes, verify as verifySignature } from "node:crypto";
 
 import { PAY_TO, paymentHeader, startApi, startFacilitator } from "./harness.mjs";
+import { cdpJwt, ed25519FromSeed, ed25519PublicKeyFromSeed, seedFromCdpSecret } from "../lib/cdp-auth.mjs";
 import {
-  SMOKE_AMOUNT_ATOMIC, cdpJwt, ed25519FromSeed, probeFacilitatorAuth, seedFromCdpSecret, settleSmoke, smokeConfig,
+  SMOKE_AMOUNT_ATOMIC, probeFacilitatorAuth, settleSmoke, smokeConfig,
 } from "../lib/x402-smoke.mjs";
 
 const USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 
-/** A CDP-shaped secret: base64 of 64 bytes (32-byte seed + 32-byte public key). */
+/**
+ * A CDP-shaped secret: base64 of 64 bytes, the 32-byte seed followed by the
+ * public key that seed actually derives. The real service emits this pairing, so
+ * the fixture must too — a random second half would let a wrong-key bug pass.
+ */
 function cdpSecret() {
   const seed = randomBytes(32);
-  return { seed, secret: Buffer.concat([seed, randomBytes(32)]).toString("base64") };
+  const publicKey = ed25519PublicKeyFromSeed(seed);
+  return { seed, publicKey, secret: Buffer.concat([seed, publicKey]).toString("base64") };
 }
 
 const enabledEnv = (facilitatorUrl, extra = {}) => ({

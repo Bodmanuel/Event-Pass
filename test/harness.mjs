@@ -19,19 +19,34 @@ export const EVENT = "evt_afrogroove_2026";
 export const FACILITATOR_TX = `0x${"ab".repeat(32)}`;
 export const PAYER = "0x00000000000000000000000000000000000000a1";
 
-/** Stand-in for a Base facilitator. Proves the server's flow, not the chain. */
-export async function startFacilitator({ valid = true, settle = true } = {}) {
-  const calls = { verify: 0, settle: 0, settled: [], payloads: [] };
+/**
+ * Stand-in for a Base facilitator. Proves the server's flow, not the chain.
+ *
+ * `prefix` mounts it the way CDP is mounted (/platform/v2/x402), so a test can
+ * assert that the JWT's `uri` claim names the whole path. `verifyStatus` and
+ * `settleStatus` override the reply with an error status. Every call records the
+ * `authorization` header and the URL the server actually hit.
+ */
+export async function startFacilitator({ valid = true, settle = true, prefix = "", verifyStatus, settleStatus } = {}) {
+  const calls = { verify: 0, settle: 0, settled: [], payloads: [], authorization: [], urls: [] };
   const app = express();
   app.use(express.json({ limit: "256kb" }));
-  app.post("/verify", (req, res) => {
+  const note = (req) => {
+    calls.authorization.push(req.get("authorization") ?? null);
+    calls.urls.push(req.originalUrl);
+  };
+  app.post(`${prefix}/verify`, (req, res) => {
     calls.verify += 1;
     calls.payloads.push(req.body);
+    note(req);
+    if (verifyStatus) { res.status(verifyStatus).json({ errorReason: "upstream_error" }); return; }
     res.json(valid ? { isValid: true, payer: PAYER } : { isValid: false, invalidReason: "insufficient_funds" });
   });
-  app.post("/settle", (req, res) => {
+  app.post(`${prefix}/settle`, (req, res) => {
     calls.settle += 1;
     calls.settled.push(req.body.paymentRequirements?.maxAmountRequired);
+    note(req);
+    if (settleStatus) { res.status(settleStatus).json({ errorReason: "upstream_error" }); return; }
     res.json(settle
       ? { success: true, transaction: FACILITATOR_TX, network: "eip155:8453", payer: PAYER }
       : { success: false, errorReason: "unexpected_settle_error" });

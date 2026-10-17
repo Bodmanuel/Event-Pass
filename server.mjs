@@ -10,7 +10,7 @@ import { createPostgresStore } from "./lib/store-postgres.mjs";
 import { createPgDriver } from "./lib/drivers/pg.mjs";
 import {
   BASE_CAIP2, USDC_BASE, buildChallenge, paymentResponseHeader,
-  readPaymentPayload, selectRequirement, settlePayment, validatePaymentPayload, verifyPayment,
+  readPaymentPayload, resolveFacilitator, selectRequirement, settlePayment, validatePaymentPayload, verifyPayment,
 } from "./lib/x402.mjs";
 // TEMPORARY — the $0.10 x402 smoke test. Remove with the routes below.
 import { SMOKE_AMOUNT_USDC, probeFacilitatorAuth, settleSmoke, smokeChallenge, smokeConfig, smokeReport } from "./lib/x402-smoke.mjs";
@@ -60,9 +60,9 @@ export async function createEventPass(env = process.env) {
     x402Version: Number(env.X402_VERSION ?? 2),
     holdMinutes: Number(env.ORDER_HOLD_MINUTES ?? 15),
     databaseUrl: env.DATABASE_URL,
-    facilitator: env.X402_FACILITATOR_URL
-      ? { url: env.X402_FACILITATOR_URL, verifyToken: env.X402_VERIFY_TOKEN, settleToken: env.X402_SETTLE_TOKEN }
-      : undefined,
+    // One authentication mode is chosen here, at boot, and never rebuilt per
+    // request — see `resolveFacilitator` for the precedence rules.
+    facilitator: resolveFacilitator(env),
   };
 
   let driver;
@@ -208,6 +208,9 @@ export async function createEventPass(env = process.env) {
       x402: {
         payToConfigured: Boolean(config.payTo),
         facilitatorConfigured: Boolean(config.facilitator),
+        // Which mode won — a name, never a credential. Makes a 401 diagnosable
+        // from outside without reading logs that do not exist.
+        authentication: config.facilitator?.auth?.mode ?? "none",
         version: config.x402Version,
       },
     });
@@ -294,6 +297,17 @@ export async function createEventPass(env = process.env) {
         error: "Payment is not configured on this deployment, so no tickets were issued.",
         detail: "Set X402_PAY_TO to the receiving USDC address and X402_FACILITATOR_URL to a Base-mainnet facilitator, then retry.",
         missing: [...(config.payTo ? [] : ["X402_PAY_TO"]), ...(config.facilitator ? [] : ["X402_FACILITATOR_URL"])],
+      });
+      return;
+    }
+
+    // A contradictory authentication configuration fails closed here rather than
+    // degrading into an unauthenticated facilitator call that would 401 for a
+    // valid key. `problem` is written to contain no secret.
+    if (config.facilitator.problem) {
+      res.status(503).json({
+        error: "Payment authentication is misconfigured on this deployment, so no tickets were issued.",
+        problems: [config.facilitator.problem],
       });
       return;
     }
@@ -563,6 +577,8 @@ if (isMain) {
     if (!config.organizerKey) console.warn("[eventpass] ORGANIZER_KEY unset — organizer check-in disabled");
     if (config.ticketSecretEphemeral) console.warn("[eventpass] TICKET_SECRET unset — signing with a random per-process secret; tickets issued now stop verifying on restart");
     if (!config.payTo || !config.facilitator) console.warn("[eventpass] payment unconfigured — the pay endpoint returns 501 and issues no tickets");
+    if (config.facilitator?.warning) console.warn(`[eventpass] ${config.facilitator.warning}`);
+    if (config.facilitator?.problem) console.warn("[eventpass] payment authentication misconfigured — the pay endpoint returns 503 and issues no tickets");
     if (config.storage === "memory") console.warn("[eventpass] in-memory storage: orders and inventory reset on restart and are not shared between instances");
   });
 
